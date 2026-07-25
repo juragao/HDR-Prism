@@ -347,7 +347,7 @@ std::vector<uint8_t> makeXmpSegment(const std::string& xmp) {
   return s;
 }
 
-// 重建图像：剥离旧 XMP（可选），在头部 APP0/EXIF/APP2 序列之后插入新 XMP
+// 重建图像：剥离旧 XMP 与 MPF 段（可选），在头部 APP0/EXIF/APP2 序列之后插入新 XMP
 bool rebuildWithXmp(const std::vector<uint8_t>& d, size_t base, size_t end,
                     const std::string& xmp, bool stripOld, std::vector<uint8_t>& out) {
   if (base + 2 > end || d[base] != 0xFF || d[base + 1] != 0xD8) return false;
@@ -373,7 +373,8 @@ bool rebuildWithXmp(const std::vector<uint8_t>& d, size_t base, size_t end,
     bool isXmp = m == 0xE1 && plLen > kXmpSigLen && memcmp(pl, kXmpSig, kXmpSigLen) == 0;
     bool isXmpExt = m == 0xE1 && plLen > kXmpExtSigLen && memcmp(pl, kXmpExtSig, kXmpExtSigLen) == 0;
     bool isExif = m == 0xE1 && plLen >= 6 && memcmp(pl, "Exif\0\0", 6) == 0;
-    if (stripOld && (isXmp || isXmpExt)) {
+    bool isMpf = (m == 0xE2 || m == 0xEB) && plLen >= 4 && memcmp(pl, "MPF\0", 4) == 0;
+    if (stripOld && (isXmp || isXmpExt || isMpf)) {
       p += 2 + len;
       continue;
     }
@@ -524,22 +525,19 @@ Result splitOne(const fs::path& f, Logger& log) {
   size_t lim = std::min(d.size() - 1, eoi + (1 << 20));
   for (size_t i = eoi; i < lim; i++)
     if (d[i] == 0xFF && d[i + 1] == 0xD8) { gm = i; break; }
-  bool hasMpf = false;
-  if (gm != kNpos)
-    for (size_t i = eoi; i + 4 <= gm; i++)
-      if (memcmp(&d[i], "MPF\0", 4) == 0) { hasMpf = true; break; }
-
   bool hdr = hasXmp && xmpHasHdrgm(xmp);
   if (!hdr) return Result::Skipped;  // 非 UltraHDR，静默跳过
-  if (!hasMpf || gm == kNpos) {
-    log.error(L"检测到 hdrgm 元数据但缺少 MPF/gainmap: " + f.wstring());
+  if (gm == kNpos) {
+    log.error(L"检测到 hdrgm 元数据但找不到 gainmap 图像: " + f.wstring());
     return Result::Error;
   }
   size_t gmEnd = jpegImageEnd(d, gm);
   if (!gmEnd) { log.error(L"gainmap 损坏: " + f.wstring()); return Result::Error; }
 
   GmParams params;
-  overlayFromXmp(params, xmp);
+  std::string xmpGm;
+  if (extractXmp(d, gm, gmEnd, xmpGm)) overlayFromXmp(params, xmpGm);  // 部分厂商把参数写在 gainmap XMP
+  overlayFromXmp(params, xmp);  // 主图 XMP 优先
   if (!params.hdrCapacityMaxSet) params.hdrCapacityMax = params.gainMapMax;
   uint32_t gw = 0, gh = 0;
   jpegDimensions(d, gm, d.size(), gw, gh);
@@ -586,24 +584,25 @@ Result assembleOne(const fs::path& f, const Config& cfg, Logger& log) {
   size_t eoiB = jpegImageEnd(b, 0);
   if (!eoiB) { log.error(L"JPEG 结构损坏: " + bPath.wstring()); return Result::Error; }
 
-  // 参数优先级：同名 .json > -a 内嵌 hdrgm XMP > ini 默认值
+  // 参数优先级：同名 .json > -a 内嵌 XMP > -b 内嵌 XMP > ini 默认值（后者补前者缺）
   GmParams params = cfg.defaults;
-  fs::path jPath = dir / (base + L".json");
+  std::string xmpB;
+  bool hasXmpB = extractXmp(b, 0, eoiB, xmpB);
+  if (hasXmpB && xmpHasHdrgm(xmpB)) overlayFromXmp(params, xmpB);
   std::string xmpA;
   bool hasXmpA = extractXmp(a, 0, eoiA, xmpA);
+  if (hasXmpA && xmpHasHdrgm(xmpA)) overlayFromXmp(params, xmpA);
+  fs::path jPath = dir / (base + L".json");
   if (fileExists(jPath)) {
     std::vector<uint8_t> jd;
     if (loadFile(jPath, jd) && !jd.empty())
       overlayFromJson(params, std::string((const char*)jd.data(), jd.size()));
-  } else if (hasXmpA && xmpHasHdrgm(xmpA)) {
-    overlayFromXmp(params, xmpA);
   }
   if (!params.hdrCapacityMaxSet) params.hdrCapacityMax = params.gainMapMax;
 
   // gainmap：保持字节原样；仅当缺少 XMP 时注入最小 XMP
   std::vector<uint8_t> gmFinal;
-  std::string xmpB;
-  if (extractXmp(b, 0, eoiB, xmpB)) {
+  if (hasXmpB) {
     gmFinal.assign(b.begin(), b.begin() + eoiB);
   } else if (!rebuildWithXmp(b, 0, eoiB, buildXmp(params, 0, false), false, gmFinal)) {
     log.error(L"gainmap 处理失败: " + bPath.wstring());

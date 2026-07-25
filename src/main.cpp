@@ -2,6 +2,7 @@
 // 纯容器字节操作，不重编码。单文件，零依赖（Win32 + CRT）。
 // 构建: cl /nologo /O2 /std:c++17 /utf-8 /EHsc /W3 /Fe:hdrprism.exe src/main.cpp
 
+#define NOMINMAX
 #include <windows.h>
 
 #include <algorithm>

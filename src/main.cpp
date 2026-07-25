@@ -205,7 +205,22 @@ bool extractHdrgmValue(const std::string& xmp, const char* key, std::string& out
     size_t e = xmp.find('<', k + 1);
     if (e == std::string::npos) return false;
     out = xmp.substr(k + 1, e - k - 1);
-    return true;
+    // rdf:Seq 数组形式（多通道值）：取第一个 <rdf:li>
+    char* numEnd = nullptr;
+    strtod(out.c_str(), &numEnd);
+    if (numEnd == out.c_str()) {
+      std::string closeTag = "</" + pat + ">";
+      size_t close = xmp.find(closeTag, k);
+      size_t li = xmp.find("<rdf:li>", k);
+      if (li != std::string::npos && (close == std::string::npos || li < close)) {
+        size_t lie = xmp.find("</rdf:li>", li);
+        if (lie != std::string::npos) out = xmp.substr(li + 8, lie - li - 8);
+      }
+    }
+    size_t b0 = out.find_first_not_of(" \t\r\n");
+    size_t b1 = out.find_last_not_of(" \t\r\n");
+    out = (b0 == std::string::npos) ? "" : out.substr(b0, b1 - b0 + 1);
+    return !out.empty();
   }
   return false;
 }
@@ -292,47 +307,63 @@ std::string toJson(const GmParams& p, uint32_t gmW, uint32_t gmH) {
   return s;
 }
 
-// primary=true：主图 XMP，含 GainMap 条目与字节长度
-std::string buildXmp(const GmParams& p, uint32_t gainmapLen, bool primary) {
+// hdrgm 参数 + GContainer 描述块（Container:Item 属性形式，与真实设备一致）
+std::string buildDescription(const GmParams& p, uint32_t gainmapLen) {
   std::string s;
-  s += "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n";
-  s += "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"HDR Prism\">\n";
-  s += " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n";
   s += "  <rdf:Description rdf:about=\"\"\n";
-  s += "   xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"\n";
-  s += "   xmlns:Container=\"http://ns.google.com/photos/1.0/container/\"\n";
-  s += "   xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\"\n";
-  s += "   hdrgm:Version=\"1.0\"\n";
-  s += "   hdrgm:GainMapMin=\"" + fmtNum(p.gainMapMin) + "\"\n";
-  s += "   hdrgm:GainMapMax=\"" + fmtNum(p.gainMapMax) + "\"\n";
-  s += "   hdrgm:Gamma=\"" + fmtNum(p.gamma) + "\"\n";
-  s += "   hdrgm:OffsetSDR=\"" + fmtNum(p.offsetSDR) + "\"\n";
-  s += "   hdrgm:OffsetHDR=\"" + fmtNum(p.offsetHDR) + "\"\n";
-  s += "   hdrgm:HDRCapacityMin=\"" + fmtNum(p.hdrCapacityMin) + "\"\n";
-  s += "   hdrgm:HDRCapacityMax=\"" + fmtNum(p.hdrCapacityMax) + "\"\n";
-  s += std::string("   hdrgm:BaseRenditionIsHDR=\"") + (p.baseRenditionIsHDR ? "True" : "False") + "\">\n";
+  s += "    xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"\n";
+  s += "    xmlns:Container=\"http://ns.google.com/photos/1.0/container/\"\n";
+  s += "    xmlns:Item=\"http://ns.google.com/photos/1.0/container/item/\"\n";
+  s += "    hdrgm:Version=\"1.0\"\n";
+  s += "    hdrgm:GainMapMin=\"" + fmtNum(p.gainMapMin) + "\"\n";
+  s += "    hdrgm:GainMapMax=\"" + fmtNum(p.gainMapMax) + "\"\n";
+  s += "    hdrgm:Gamma=\"" + fmtNum(p.gamma) + "\"\n";
+  s += "    hdrgm:OffsetSDR=\"" + fmtNum(p.offsetSDR) + "\"\n";
+  s += "    hdrgm:OffsetHDR=\"" + fmtNum(p.offsetHDR) + "\"\n";
+  s += "    hdrgm:HDRCapacityMin=\"" + fmtNum(p.hdrCapacityMin) + "\"\n";
+  s += "    hdrgm:HDRCapacityMax=\"" + fmtNum(p.hdrCapacityMax) + "\"\n";
+  s += std::string("    hdrgm:BaseRenditionIsHDR=\"") + (p.baseRenditionIsHDR ? "True" : "False") + "\">\n";
   s += "   <Container:Directory>\n";
   s += "    <rdf:Seq>\n";
   s += "     <rdf:li rdf:parseType=\"Resource\">\n";
-  s += "      <Item:Semantic>Primary</Item:Semantic>\n";
-  s += "      <Item:Mime>image/jpeg</Item:Mime>\n";
+  s += "      <Container:Item Item:Semantic=\"Primary\" Item:Mime=\"image/jpeg\"/>\n";
   s += "     </rdf:li>\n";
-  if (primary) {
-    s += "     <rdf:li rdf:parseType=\"Resource\">\n";
-    s += "      <Item:Semantic>GainMap</Item:Semantic>\n";
-    s += "      <Item:Mime>image/jpeg</Item:Mime>\n";
-    s += "      <Item:Length>" + std::to_string(gainmapLen) + "</Item:Length>\n";
-    s += "     </rdf:li>\n";
-  }
+  s += "     <rdf:li rdf:parseType=\"Resource\">\n";
+  s += "      <Container:Item Item:Semantic=\"GainMap\" Item:Mime=\"image/jpeg\" Item:Length=\"" + std::to_string(gainmapLen) + "\"/>\n";
+  s += "     </rdf:li>\n";
   s += "    </rdf:Seq>\n";
   s += "   </Container:Directory>\n";
   s += "  </rdf:Description>\n";
-  s += " </rdf:RDF>\n";
-  s += "</x:xmpmeta>\n";
-  s += "<?xpacket end=\"w\"?>\n";
   return s;
 }
 
+std::string buildXmpPrimary(const GmParams& p, uint32_t gainmapLen) {
+  return "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"HDR Prism\">\n"
+         " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n" +
+         buildDescription(p, gainmapLen) +
+         " </rdf:RDF>\n</x:xmpmeta>\n";
+}
+
+// gainmap XMP（仅外来 -b 缺 XMP 时注入）：hdrgm 参数，无容器目录
+std::string buildXmpGainmap(const GmParams& p) {
+  std::string s;
+  s += "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"HDR Prism\">\n";
+  s += " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n";
+  s += "  <rdf:Description rdf:about=\"\"\n";
+  s += "    xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"\n";
+  s += "    hdrgm:Version=\"1.0\"\n";
+  s += "    hdrgm:GainMapMin=\"" + fmtNum(p.gainMapMin) + "\"\n";
+  s += "    hdrgm:GainMapMax=\"" + fmtNum(p.gainMapMax) + "\"\n";
+  s += "    hdrgm:Gamma=\"" + fmtNum(p.gamma) + "\"\n";
+  s += "    hdrgm:OffsetSDR=\"" + fmtNum(p.offsetSDR) + "\"\n";
+  s += "    hdrgm:OffsetHDR=\"" + fmtNum(p.offsetHDR) + "\"\n";
+  s += "    hdrgm:HDRCapacityMin=\"" + fmtNum(p.hdrCapacityMin) + "\"\n";
+  s += "    hdrgm:HDRCapacityMax=\"" + fmtNum(p.hdrCapacityMax) + "\"\n";
+  s += std::string("    hdrgm:BaseRenditionIsHDR=\"") + (p.baseRenditionIsHDR ? "True" : "False") + "\"/>\n";
+  s += " </rdf:RDF>\n";
+  s += "</x:xmpmeta>\n";
+  return s;
+}
 // ---------- 容器装配 ----------
 
 std::vector<uint8_t> makeXmpSegment(const std::string& xmp) {
@@ -397,8 +428,9 @@ void be16(std::vector<uint8_t>& v, uint32_t x) {
 }
 void be32(std::vector<uint8_t>& v, uint32_t x) { be16(v, x >> 16); be16(v, x); }
 
-// MPF (CIPA DC-X007) APP11 段：主图 + gainmap 两幅
-std::vector<uint8_t> buildMpfSegment(uint32_t primarySize, uint32_t gainmapSize) {
+// MPF (CIPA DC-X007) 段：主图 + gainmap 两幅；置于主图内部（APP2）
+std::vector<uint8_t> buildMpfSegment(uint8_t marker, uint32_t primarySize, uint32_t gainmapSize,
+                                     uint32_t gainmapOffset) {
   std::vector<uint8_t> body;
   body.insert(body.end(), {'M', 'M', 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08});  // MP Header
   be16(body, 3);                                        // IFD 条目数
@@ -409,11 +441,11 @@ std::vector<uint8_t> buildMpfSegment(uint32_t primarySize, uint32_t gainmapSize)
   be32(body, 0);                                        // 无下一个 IFD
   // Entry[0]：Baseline MP Primary，offset 约定为 0
   be32(body, 0x00030000); be32(body, primarySize); be32(body, 0); be16(body, 0); be16(body, 0);
-  // Entry[1]：gainmap 紧跟本段之后，距 MP Header 起点 82 字节
-  be32(body, 0x00000000); be32(body, gainmapSize); be32(body, 82); be16(body, 0); be16(body, 0);
+  // Entry[1]：gainmap 位置（相对 MP Header 起点）
+  be32(body, 0x00000000); be32(body, gainmapSize); be32(body, gainmapOffset); be16(body, 0); be16(body, 0);
   std::vector<uint8_t> seg;
   seg.push_back(0xFF);
-  seg.push_back(0xEB);
+  seg.push_back(marker);
   be16(seg, (uint32_t)body.size() + 4 + 2);
   seg.insert(seg.end(), {'M', 'P', 'F', 0x00});
   seg.insert(seg.end(), body.begin(), body.end());
@@ -604,18 +636,48 @@ Result assembleOne(const fs::path& f, const Config& cfg, Logger& log) {
   std::vector<uint8_t> gmFinal;
   if (hasXmpB) {
     gmFinal.assign(b.begin(), b.begin() + eoiB);
-  } else if (!rebuildWithXmp(b, 0, eoiB, buildXmp(params, 0, false), false, gmFinal)) {
+  } else if (!rebuildWithXmp(b, 0, eoiB, buildXmpGainmap(params), false, gmFinal)) {
     log.error(L"gainmap 处理失败: " + bPath.wstring());
     return Result::Error;
   }
 
-  // 主图：剥旧 XMP，插入新 XMP（EXIF/ICC 等其余段原样保留）
-  std::vector<uint8_t> primary;
-  if (!rebuildWithXmp(a, 0, eoiA, buildXmp(params, (uint32_t)gmFinal.size(), true), true, primary)) {
+  // 主图 XMP 策略：原 XMP 含 hdrgm/container 则整体替换；否则追加描述块以保留原元数据
+  std::string newXmp;
+  bool replaceXmp = !hasXmpA || xmpA.find("hdr-gain-map") != std::string::npos ||
+                    xmpA.find("photos/1.0/container") != std::string::npos;
+  if (replaceXmp) {
+    newXmp = buildXmpPrimary(params, (uint32_t)gmFinal.size());
+  } else {
+    size_t close = xmpA.rfind("</rdf:RDF>");
+    newXmp = close == std::string::npos
+                 ? buildXmpPrimary(params, (uint32_t)gmFinal.size())
+                 : xmpA.substr(0, close) + buildDescription(params, (uint32_t)gmFinal.size()) + xmpA.substr(close);
+  }
+
+  // 主图：剥旧 XMP/MPF，插入新 XMP，MPF(APP2) 紧随其后（与真实设备布局一致）
+  std::vector<uint8_t> prim1;
+  if (!rebuildWithXmp(a, 0, eoiA, newXmp, true, prim1)) {
     log.error(L"主图处理失败: " + f.wstring());
     return Result::Error;
   }
-  std::vector<uint8_t> mpf = buildMpfSegment((uint32_t)primary.size(), (uint32_t)gmFinal.size());
+  size_t xmpStart = kNpos, xmpSegLen = 0;
+  forEachSegment(prim1, 0, prim1.size(), [&](uint8_t m, size_t payload, size_t payloadLen) {
+    if (xmpStart == kNpos && m == 0xE1 && payloadLen > kXmpSigLen &&
+        memcmp(&prim1[payload], kXmpSig, kXmpSigLen) == 0) {
+      xmpStart = payload - 4;
+      xmpSegLen = payloadLen + 4;
+    }
+  });
+  if (xmpStart == kNpos) { log.error(L"主图 XMP 注入失败: " + f.wstring()); return Result::Error; }
+  size_t mpfPos = xmpStart + xmpSegLen;
+  uint32_t finalPrimLen = (uint32_t)(prim1.size() + 90);
+  uint32_t gmOff = (uint32_t)(finalPrimLen - (mpfPos + 8));
+  std::vector<uint8_t> mpf = buildMpfSegment(0xE2, finalPrimLen, (uint32_t)gmFinal.size(), gmOff);
+  std::vector<uint8_t> primary;
+  primary.reserve(prim1.size() + mpf.size());
+  primary.insert(primary.end(), prim1.begin(), prim1.begin() + mpfPos);
+  primary.insert(primary.end(), mpf.begin(), mpf.end());
+  primary.insert(primary.end(), prim1.begin() + mpfPos, prim1.end());
 
   fs::path outDir = cfg.outputDir.empty() ? dir : fs::path(cfg.outputDir);
   std::error_code ec;
@@ -637,7 +699,7 @@ Result assembleOne(const fs::path& f, const Config& cfg, Logger& log) {
     }
     return true;
   };
-  bool ok = writeAll(primary) && writeAll(mpf) && writeAll(gmFinal);
+  bool ok = writeAll(primary) && writeAll(gmFinal);
   CloseHandle(h);
   if (!ok) { log.error(L"写入失败: " + outPath.wstring()); return Result::Error; }
   return Result::Ok;

@@ -547,7 +547,7 @@ bool xmpHasHdrgm(const std::string& xmp) {
          xmp.find("hdrgm:GainMapMax") != std::string::npos;
 }
 
-Result splitOne(const fs::path& f, Logger& log) {
+Result splitOne(const fs::path& f, const Config& cfg, Logger& log) {
   std::vector<uint8_t> d;
   if (!loadFile(f, d)) { log.error(L"读取失败: " + f.wstring()); return Result::Error; }
   size_t eoi = jpegImageEnd(d, 0);
@@ -754,7 +754,7 @@ int wmain(int argc, wchar_t** argv) {
     Result r;
     if (mode == Mode::Split) {
       if (stemEndsWith(f, L'a') || stemEndsWith(f, L'b')) continue;  // 跳过自己的产物
-      r = splitOne(f, log);
+      r = splitOne(f, cfg, log);
     } else {
       if (!stemEndsWith(f, L'a')) continue;  // 只处理 -a
       r = assembleOne(f, cfg, log);

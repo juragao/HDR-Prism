@@ -455,7 +455,8 @@ std::vector<uint8_t> buildMpfSegment(uint8_t marker, uint32_t primarySize, uint3
 // ---------- 配置 / 日志 ----------
 
 struct Config {
-  std::wstring outputDir;
+  std::wstring sdrOutputDir;
+  std::wstring hdrOutputDir;
   GmParams defaults;
 };
 
@@ -473,7 +474,8 @@ Config loadConfig(const fs::path& exeDir) {
     if (set) *set = true;
     return _wtof(s.c_str());
   };
-  c.outputDir = getStr(L"Paths", L"OutputDir");
+  c.sdrOutputDir = getStr(L"Paths", L"SdrOutputDir");
+  c.hdrOutputDir = getStr(L"Paths", L"HdrOutputDir");
   GmParams& p = c.defaults;
   p.gainMapMin = getNum(L"GainMapMin", 0.0);
   p.gainMapMax = getNum(L"GainMapMax", 3.0);
@@ -574,12 +576,18 @@ Result splitOne(const fs::path& f, Logger& log) {
   uint32_t gw = 0, gh = 0;
   jpegDimensions(d, gm, d.size(), gw, gh);
 
-  fs::path dir = f.parent_path();
-  std::wstring base = f.stem().wstring();
-  std::wstring ext = f.extension().wstring();
-  fs::path aOut = uniquePath(dir / (base + L"-a" + ext));
-  fs::path bOut = uniquePath(dir / (base + L"-b" + ext));
-  fs::path jOut = uniquePath(dir / (base + L".json"));
+fs::path dir = f.parent_path();
+
+fs::path outDir = cfg.sdrOutputDir.empty()
+    ? (dir / L"SDR output")
+    : fs::path(cfg.sdrOutputDir);
+
+std::error_code ec;
+fs::create_directories(outDir, ec);
+
+fs::path aOut = uniquePath(outDir / (base + L"-a" + ext));
+fs::path bOut = uniquePath(outDir / (base + L"-b" + ext));
+fs::path jOut = uniquePath(outDir / (base + L".json"));
   if (aOut.empty() || bOut.empty() || jOut.empty()) {
     log.error(L"无法分配输出文件名: " + f.wstring());
     return Result::Error;
@@ -679,7 +687,9 @@ Result assembleOne(const fs::path& f, const Config& cfg, Logger& log) {
   primary.insert(primary.end(), mpf.begin(), mpf.end());
   primary.insert(primary.end(), prim1.begin() + mpfPos, prim1.end());
 
-  fs::path outDir = cfg.outputDir.empty() ? dir : fs::path(cfg.outputDir);
+  fs::path outDir = cfg.hdrOutputDir.empty()
+    ? (dir / L"HDR output")
+    : fs::path(cfg.hdrOutputDir);
   std::error_code ec;
   fs::create_directories(outDir, ec);
   fs::path outPath = uniquePath(outDir / (base + ext));

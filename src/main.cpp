@@ -577,6 +577,8 @@ Result splitOne(const fs::path& f, const Config& cfg, Logger& log) {
   jpegDimensions(d, gm, d.size(), gw, gh);
 
 fs::path dir = f.parent_path();
+std::wstring base = f.stem().wstring();
+std::wstring ext = f.extension().wstring();
 
 fs::path outDir = cfg.sdrOutputDir.empty()
     ? (dir / L"SDR output")
